@@ -89,6 +89,9 @@ struct fd_sock_tile {
   uchar * tx_ptr; /* in [tx_scratch0,tx_scratch1) */
 
   fd_sock_tile_metrics_t metrics;
+
+  int           event_fd;
+  ulong frag_counter;
 };
 
 typedef struct fd_sock_tile fd_sock_tile_t;

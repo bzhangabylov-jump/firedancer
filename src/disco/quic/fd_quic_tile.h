@@ -60,6 +60,9 @@ typedef struct {
     ulong quic_txn_too_small;
     ulong quic_txn_too_large;
   } metrics;
+
+  int event_fd;
+  ulong frag_counter;
 } fd_quic_ctx_t;
 
 #endif /* HEADER_fd_src_app_fdctl_run_tiles_fd_quic_tile_h */

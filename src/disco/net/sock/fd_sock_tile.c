@@ -4,7 +4,7 @@
 #include "../../../util/net/fd_eth.h"
 #include "../../../util/net/fd_ip4.h"
 #include "../../../util/net/fd_udp.h"
-
+#include "../../../util/pod/fd_pod.h"
 #include <assert.h> /* assert */
 #include <stdalign.h> /* alignof */
 #include <errno.h>
@@ -14,6 +14,8 @@
 #include <sys/socket.h> /* socket */
 #include "generated/sock_seccomp.h"
 #include "../../metrics/fd_metrics.h"
+#include <sys/eventfd.h> /* eventfd */
+
 
 /* recv/sendmmsg packet count in batch and tango burst depth
    FIXME make configurable in the future?
@@ -228,6 +230,11 @@ privileged_init( fd_topo_t *      topo,
     ctx->sock_cnt++;
   }
 
+  ctx->event_fd = fd_pod_query_int(topo->props, "shared_eventfd", -1);
+  ctx->pollfd[ ctx->sock_cnt ].fd = ctx->event_fd;
+  ctx->pollfd[ ctx->sock_cnt ].events = POLLIN;
+  ctx->sock_cnt++;
+
   /* Create transmit socket */
 
   int tx_sock = socket( AF_INET, SOCK_RAW|SOCK_CLOEXEC, FD_IP4_HDR_PROTOCOL_UDP );
@@ -248,6 +255,11 @@ static void
 unprivileged_init( fd_topo_t *      topo,
                    fd_topo_tile_t * tile ) {
   fd_sock_tile_t * ctx = fd_topo_obj_laddr( topo, tile->tile_obj_id );
+
+  ctx->event_fd = fd_pod_query_int(topo->props, "shared_eventfd", -1);
+  if (ctx->event_fd == -1) {
+    FD_LOG_ERR(("shared_eventfd not found"));
+  }
 
   if( FD_UNLIKELY( tile->out_cnt > MAX_NET_OUTS ) ) {
     FD_LOG_ERR(( "sock tile has %lu out links which exceeds the max (%lu)", tile->out_cnt, MAX_NET_OUTS ));
@@ -412,11 +424,23 @@ poll_rx( fd_sock_tile_t *    ctx,
     FD_LOG_ERR(( "Batch is not clean" ));
   }
   ctx->tx_idle_cnt = 0; /* restart TX polling */
-  if( FD_UNLIKELY( poll( ctx->pollfd, ctx->sock_cnt, 0 )<0 ) ) {
-    FD_LOG_ERR(( "poll failed (%i-%s)", errno, fd_io_strerror( errno ) ));
-  }
+
+  long ticks_until_deadline = stem->housekeeping_deadline_ticks - fd_tickcount();
+  long ns_until_deadline    = (long) ((double)ticks_until_deadline / fd_tempo_tick_per_ns(NULL));
+  if (ns_until_deadline < 0) ns_until_deadline = 0;
+  struct timespec timeout = {
+      .tv_sec = ns_until_deadline / (long)1e9,
+      .tv_nsec = ns_until_deadline % (long)1e9
+  };
+
+  int ret_val = ppoll( ctx->pollfd, ctx->sock_cnt, &timeout, NULL );
+  if( FD_UNLIKELY( ret_val<0 ) ) FD_LOG_ERR(( "poll failed (%i-%s)", errno, fd_io_strerror( errno ) ));
   for( uint j=0UL; j<ctx->sock_cnt; j++ ) {
     if( ctx->pollfd[ j ].revents & (POLLIN|POLLERR) ) {
+      if (ctx->pollfd[ j ].fd == ctx->event_fd) {
+        continue;
+      }
+
       pkt_cnt += poll_rx_socket(
         ctx,
         stem,
@@ -501,6 +525,12 @@ before_frag( fd_sock_tile_t * ctx    FD_PARAM_UNUSED,
              ulong            sig ) {
   ulong proto = fd_disco_netmux_sig_proto( sig );
   if( FD_UNLIKELY( proto!=DST_PROTO_OUTGOING ) ) return 1;
+  long buf;
+  long bytesread = read(ctx->event_fd, &buf, 8);
+  if (bytesread != 8) {
+    FD_LOG_ERR(("read failed to read 8 bytes from event_fd %d, bytes_read %ld, errno %d, ctx->frag_counter %lu", ctx->event_fd, bytesread, errno, ctx->frag_counter));
+  }
+  ctx->frag_counter++;
   return 0; /* continue */
 }
 

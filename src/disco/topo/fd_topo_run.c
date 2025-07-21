@@ -4,7 +4,7 @@
 #include "../metrics/fd_metrics.h"
 #include "../../waltz/xdp/fd_xdp1.h"
 #include "../../util/tile/fd_tile_private.h"
-
+#include "../../util/pod/fd_pod.h"
 #include <unistd.h>
 #include <signal.h>
 #include <errno.h>
@@ -16,6 +16,8 @@
 #include <sys/stat.h>
 #include <sys/mman.h>
 #include <net/if.h>
+#include <sys/eventfd.h>
+
 
 static void
 initialize_logging( char const * tile_name,
@@ -359,6 +361,13 @@ fd_topo_run_single_process( fd_topo_t *       topo,
   errno = 0;
   int save_priority = getpriority( PRIO_PROCESS, 0 );
   if( FD_UNLIKELY( -1==save_priority && errno ) ) FD_LOG_ERR(( "getpriority() failed (%i-%s)", errno, fd_io_strerror( errno ) ));
+
+  int shared_eventfd = eventfd(0, EFD_CLOEXEC | EFD_NONBLOCK | EFD_SEMAPHORE);
+  if (FD_UNLIKELY(shared_eventfd == -1)) {
+    FD_LOG_ERR(("eventfd() failed (%i-%s)", errno, fd_io_strerror(errno)));
+  }
+
+  FD_TEST( fd_pod_insert_int( topo->props, "shared_eventfd", shared_eventfd ) );
 
   for( ulong i=0UL; i<topo->tile_cnt; i++ ) {
     fd_topo_tile_t * tile = &topo->tiles[ i ];

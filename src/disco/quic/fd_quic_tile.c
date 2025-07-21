@@ -6,6 +6,7 @@
 #include "../../waltz/quic/fd_quic_private.h"
 #include "generated/quic_seccomp.h"
 #include "../../util/net/fd_eth.h"
+#include "../../util/pod/fd_pod.h"
 
 #include <errno.h>
 #include <linux/unistd.h>
@@ -419,6 +420,15 @@ quic_tx_aio_send( void *                    _ctx,
     ulong sig = fd_disco_netmux_sig( ip_dst, 0U, ip_dst, DST_PROTO_OUTGOING, FD_NETMUX_SIG_MIN_HDR_SZ );
 
     long tspub = fd_tickcount();
+
+    ulong event_fd_val = 1;
+    long ret_val = write(ctx->event_fd, &event_fd_val, 8);
+    if (ret_val != 8) {
+      FD_LOG_ERR(("write failed to write 8 bytes to event_fd %d, ret_val %ld, errno %d, frag_counter %lu", ctx->event_fd, ret_val, errno, ctx->frag_counter));
+    }
+    ctx->frag_counter++;
+    // FD_LOG_NOTICE(("QUIC SEND COUNTER %lu, net_out_seq %lu", ctx->frag_counter, ctx->net_out_seq));
+
     fd_mcache_publish( ctx->net_out_mcache,
                        ctx->net_out_depth,
                        ctx->net_out_seq,
@@ -500,6 +510,13 @@ unprivileged_init( fd_topo_t *      topo,
   FD_SCRATCH_ALLOC_INIT( l, scratch );
   fd_quic_ctx_t * ctx = FD_SCRATCH_ALLOC_APPEND( l, alignof( fd_quic_ctx_t ), sizeof( fd_quic_ctx_t ) );
   fd_memset( ctx, 0, sizeof(fd_quic_ctx_t) );
+
+
+  ctx->event_fd = fd_pod_query_int(topo->props, "shared_eventfd", -1);
+  if (ctx->event_fd == -1) {
+    FD_LOG_ERR(("shared_eventfd not found"));
+  }
+  ctx->frag_counter = 0UL;
 
   for( ulong i=0; i<tile->in_cnt; i++ ) {
     fd_topo_link_t * link = &topo->links[ tile->in_link_id[ i ] ];

@@ -1,4 +1,6 @@
 #include "../tiles.h"
+#include "../../util/pod/fd_pod.h"
+#include <errno.h>
 
 #include "generated/fd_shred_tile_seccomp.h"
 #include "../../util/pod/fd_pod_format.h"
@@ -16,6 +18,7 @@
 #include "../../util/net/fd_net_headers.h"
 
 #include <linux/unistd.h>
+
 
 /* The shred tile handles shreds from two data sources: shreds
    generated from microblocks from the banking tile, and shreds
@@ -242,6 +245,9 @@ typedef struct {
   fd_shred_dest_idx_t scratchpad_dests[ FD_SHRED_DEST_MAX_FANOUT*(FD_REEDSOL_DATA_SHREDS_MAX+FD_REEDSOL_PARITY_SHREDS_MAX) ];
 
   uchar chained_merkle_root[ FD_SHRED_MERKLE_ROOT_SZ ];
+
+  int event_fd;
+  ulong frag_counter;
 } fd_shred_ctx_t;
 
 /* PENDING_BATCH_WMARK: Following along the lines of dcache, batch
@@ -597,7 +603,15 @@ send_shred( fd_shred_ctx_t                 * ctx,
             fd_shred_dest_weighted_t const * dest,
             ulong                            tsorig ) {
 
-  if( FD_UNLIKELY( !dest->ip4 ) ) return;
+  // if( FD_UNLIKELY( !dest->ip4 ) ) return; // COMMENTED OUT FOR FDDEV
+
+  ulong event_fd_val = 1;
+  long ret_val = write(ctx->event_fd, &event_fd_val, 8);
+  if (ret_val != 8) {
+    FD_LOG_ERR(("write failed to write 8 bytes to event_fd %d, ret_val %ld, errno %d, frag_counter %lu", ctx->event_fd, ret_val, errno, ctx->frag_counter));
+  }
+  ctx->frag_counter++;
+  // FD_LOG_NOTICE(("SHRED SEND COUNTER %lu, net_out_seq %lu", ctx->frag_counter, ctx->net_out_seq));
 
   uchar * packet = fd_chunk_to_laddr( ctx->net_out_mem, ctx->net_out_chunk );
 
@@ -993,6 +1007,12 @@ unprivileged_init( fd_topo_t *      topo,
 
   FD_SCRATCH_ALLOC_INIT( l, scratch );
   fd_shred_ctx_t * ctx = FD_SCRATCH_ALLOC_APPEND( l, alignof( fd_shred_ctx_t ), sizeof( fd_shred_ctx_t ) );
+
+  ctx->event_fd = fd_pod_query_int(topo->props, "shared_eventfd", -1);
+  if (ctx->event_fd == -1) {
+    FD_LOG_ERR(("shared_eventfd not found"));
+  }
+  ctx->frag_counter = 0UL;
 
   ctx->round_robin_cnt = fd_topo_tile_name_cnt( topo, tile->name );
   ctx->round_robin_id  = tile->kind_id;
