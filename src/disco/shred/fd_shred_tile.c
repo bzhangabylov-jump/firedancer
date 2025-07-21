@@ -286,6 +286,14 @@ scratch_footprint( fd_topo_tile_t const * tile ) {
 
 static inline void
 during_housekeeping( fd_shred_ctx_t * ctx ) {
+
+  ulong event_fd_val = 1;
+  long ret_val = write(ctx->event_fd, &event_fd_val, 8);
+  if (ret_val != 8) {
+    FD_LOG_ERR(("write failed to write 8 bytes to event_fd %d, ret_val %ld, errno %d, frag_counter %lu", ctx->event_fd, ret_val, errno, ctx->frag_counter));
+  }
+  ctx->frag_counter++;
+
   if( FD_UNLIKELY( fd_keyswitch_state_query( ctx->keyswitch )==FD_KEYSWITCH_STATE_SWITCH_PENDING ) ) {
     ulong seq_must_complete = ctx->keyswitch->param;
 
@@ -605,13 +613,6 @@ send_shred( fd_shred_ctx_t                 * ctx,
 
   // if( FD_UNLIKELY( !dest->ip4 ) ) return; // COMMENTED OUT FOR FDDEV
 
-  ulong event_fd_val = 1;
-  long ret_val = write(ctx->event_fd, &event_fd_val, 8);
-  if (ret_val != 8) {
-    FD_LOG_ERR(("write failed to write 8 bytes to event_fd %d, ret_val %ld, errno %d, frag_counter %lu", ctx->event_fd, ret_val, errno, ctx->frag_counter));
-  }
-  ctx->frag_counter++;
-  // FD_LOG_NOTICE(("SHRED SEND COUNTER %lu, net_out_seq %lu", ctx->frag_counter, ctx->net_out_seq));
 
   uchar * packet = fd_chunk_to_laddr( ctx->net_out_mem, ctx->net_out_chunk );
 

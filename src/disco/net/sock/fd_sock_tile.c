@@ -438,6 +438,14 @@ poll_rx( fd_sock_tile_t *    ctx,
   for( uint j=0UL; j<ctx->sock_cnt; j++ ) {
     if( ctx->pollfd[ j ].revents & (POLLIN|POLLERR) ) {
       if (ctx->pollfd[ j ].fd == ctx->event_fd) {
+        long buf;
+        long bytesread = read(ctx->event_fd, &buf, 8);
+        if (bytesread != 8) {
+          if (errno != EAGAIN) {
+            FD_LOG_ERR(("read failed to read 8 bytes from event_fd %d, bytes_read %ld, errno %d, ctx->frag_counter %lu", ctx->event_fd, bytesread, errno, ctx->frag_counter));
+          }
+        }
+        ctx->frag_counter++;
         continue;
       }
 
@@ -525,12 +533,6 @@ before_frag( fd_sock_tile_t * ctx    FD_PARAM_UNUSED,
              ulong            sig ) {
   ulong proto = fd_disco_netmux_sig_proto( sig );
   if( FD_UNLIKELY( proto!=DST_PROTO_OUTGOING ) ) return 1;
-  long buf;
-  long bytesread = read(ctx->event_fd, &buf, 8);
-  if (bytesread != 8) {
-    FD_LOG_ERR(("read failed to read 8 bytes from event_fd %d, bytes_read %ld, errno %d, ctx->frag_counter %lu", ctx->event_fd, bytesread, errno, ctx->frag_counter));
-  }
-  ctx->frag_counter++;
   return 0; /* continue */
 }
 

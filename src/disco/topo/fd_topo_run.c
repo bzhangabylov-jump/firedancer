@@ -362,7 +362,7 @@ fd_topo_run_single_process( fd_topo_t *       topo,
   int save_priority = getpriority( PRIO_PROCESS, 0 );
   if( FD_UNLIKELY( -1==save_priority && errno ) ) FD_LOG_ERR(( "getpriority() failed (%i-%s)", errno, fd_io_strerror( errno ) ));
 
-  int shared_eventfd = eventfd(0, EFD_CLOEXEC | EFD_NONBLOCK | EFD_SEMAPHORE);
+  int shared_eventfd = eventfd(0, EFD_CLOEXEC | EFD_NONBLOCK );
   if (FD_UNLIKELY(shared_eventfd == -1)) {
     FD_LOG_ERR(("eventfd() failed (%i-%s)", errno, fd_io_strerror(errno)));
   }
