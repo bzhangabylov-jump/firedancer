@@ -175,6 +175,7 @@ FD_FN_CONST ulong *       fd_mcache_seq_laddr      ( fd_frag_meta_t *       mcac
 FD_FN_PURE uchar const * fd_mcache_app_laddr_const( fd_frag_meta_t const * mcache );
 FD_FN_PURE uchar *       fd_mcache_app_laddr      ( fd_frag_meta_t *       mcache );
 
+// TODO: add documentation
 FD_FN_PURE uint const * fd_mcache_futex_flag_const( fd_frag_meta_t const * mcache );
 FD_FN_PURE uint *       fd_mcache_futex_flag      ( fd_frag_meta_t *       mcache );
 
