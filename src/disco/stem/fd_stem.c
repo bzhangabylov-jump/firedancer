@@ -172,6 +172,7 @@
 #include "../topo/fd_topo.h"
 #include "../metrics/fd_metrics.h"
 #include "../../tango/fd_tango.h"
+#include "fd_scheduler_shm.h"
 
 #ifndef STEM_NAME
 #define STEM_NAME stem
@@ -765,6 +766,8 @@ STEM_(run)( fd_topo_t *      topo,
   FD_TEST( fd_rng_join( fd_rng_new( rng, 0, 0UL ) ) );
 
   STEM_CALLBACK_CONTEXT_TYPE * ctx = (STEM_CALLBACK_CONTEXT_TYPE*)fd_ulong_align_up( (ulong)fd_topo_obj_laddr( topo, tile->tile_obj_id ), STEM_CALLBACK_CONTEXT_ALIGN );
+
+  fd_scheduler_shm_init( tile->name );
 
   STEM_(run1)( polled_in_cnt,
                in_mcache,
