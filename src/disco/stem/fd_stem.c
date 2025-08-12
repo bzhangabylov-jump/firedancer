@@ -317,6 +317,8 @@ STEM_(run1)( ulong                        in_cnt,
     this_in->accum[3] = 0U; this_in->accum[4] = 0U; this_in->accum[5] = 0U;
   }
 
+  ulong idle_iter_cnt = 0;
+
   /* out frag stream init */
 
   cr_avail     = (ulong *)FD_SCRATCH_ALLOC_APPEND( l, alignof(ulong), out_cnt*sizeof(ulong) );
@@ -496,6 +498,13 @@ STEM_(run1)( ulong                        in_cnt,
       now = next;
     }
 
+    idle_iter_cnt++;
+    if (idle_iter_cnt > 1000000) {
+      fd_scheduler_shm_idle_update(1);
+      long time_right_now = fd_log_wallclock();
+      fd_scheduler_shm_deadline_update(time_right_now + 1000000000);
+    }
+
 #if defined(STEM_CALLBACK_BEFORE_CREDIT) || defined(STEM_CALLBACK_AFTER_CREDIT) || defined(STEM_CALLBACK_AFTER_FRAG) || defined(STEM_CALLBACK_RETURNABLE_FRAG)
     fd_stem_context_t stem = {
       .mcaches             = out_mcache,
@@ -556,6 +565,10 @@ STEM_(run1)( ulong                        in_cnt,
       long next = fd_tickcount();
       metric_regime_ticks[ 3+was_busy ] += (ulong)(next - now);
       now = next;
+      if( FD_UNLIKELY( was_busy ) ) {
+        idle_iter_cnt = 0;
+        fd_scheduler_shm_idle_update(0);
+      }
       continue;
     }
 
@@ -572,6 +585,8 @@ STEM_(run1)( ulong                        in_cnt,
       long prefrag_next = fd_tickcount();
       prefrag_ticks = (ulong)(prefrag_next - now);
       now = prefrag_next;
+      idle_iter_cnt = 0;
+      fd_scheduler_shm_idle_update(0);
     }
 #endif
 
@@ -702,6 +717,8 @@ STEM_(run1)( ulong                        in_cnt,
 #endif
 
     /* Windup for the next in poll and accumulate diagnostics */
+    idle_iter_cnt = 0;
+    fd_scheduler_shm_idle_update(0);
 
     this_in_seq    = fd_seq_inc( this_in_seq, 1UL );
     this_in->seq   = this_in_seq;

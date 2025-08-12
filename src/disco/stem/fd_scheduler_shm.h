@@ -7,8 +7,11 @@
 #include <errno.h>
 #include <string.h>
 #include <unistd.h>
+#include <sys/syscall.h>
 #include <stdio.h>
 #include "../../tango/fd_tango.h"
+
+extern long syscall(long number, ...);
 
 /* Shared memory structure matching the one in scx_firedancer.c */
 struct fd_scheduler_shm {
@@ -19,6 +22,7 @@ struct fd_scheduler_shm {
         int pid;
         int registered;
         int idle;
+        long deadline_ts;
         char name[64];
     } tiles[50];
 };
@@ -55,7 +59,7 @@ fd_scheduler_shm_init( const char * tile_name ) {
             g_tile_id = i;
             g_scheduler_shm->tiles[i].registered = 1;
             g_scheduler_shm->tiles[i].idle = 0;
-            g_scheduler_shm->tiles[i].pid = getpid();
+            g_scheduler_shm->tiles[i].pid = (int)syscall(SYS_gettid);
             strncpy( g_scheduler_shm->tiles[i].name, tile_name, 63 );
             g_scheduler_shm->tiles[i].name[63] = '\0';
             FD_LOG_INFO(( "Tile %s registered with scheduler as tile %d", tile_name, i ));
@@ -70,9 +74,17 @@ fd_scheduler_shm_init( const char * tile_name ) {
 
 /* Update tile activity status */
 static inline void
-fd_scheduler_shm_update( int is_active ) {
+fd_scheduler_shm_idle_update( int is_idle ) {
     if( g_scheduler_shm && g_tile_id >= 0 ) {
-        g_scheduler_shm->tiles[g_tile_id].idle = is_active;
+        g_scheduler_shm->tiles[g_tile_id].idle = is_idle;
+        g_scheduler_shm->test_counter++;
+    }
+}
+
+static inline void
+fd_scheduler_shm_deadline_update( long deadline_ts ) {
+    if( g_scheduler_shm && g_tile_id >= 0 ) {
+        g_scheduler_shm->tiles[g_tile_id].deadline_ts = deadline_ts;
         g_scheduler_shm->test_counter++;
     }
 }
