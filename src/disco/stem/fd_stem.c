@@ -172,6 +172,7 @@
 #include "../topo/fd_topo.h"
 #include "../metrics/fd_metrics.h"
 #include "../../tango/fd_tango.h"
+#include "fd_scheduler_shm.h"
 
 #ifndef STEM_NAME
 #define STEM_NAME stem
@@ -529,6 +530,7 @@ STEM_(run1)( ulong                        in_cnt,
       if ( FD_UNLIKELY( !is_leader ) ) {
         long ticks_until_deadline = then - now;
         long ns_until_deadline    = (long)((double)ticks_until_deadline / ticks_per_ns);
+        fd_scheduler_shm_idle_update(1);
         fd_log_sleep( ns_until_deadline );
 
         metric_regime_ticks[0] += housekeeping_ticks;
@@ -600,7 +602,10 @@ STEM_(run1)( ulong                        in_cnt,
       long next = fd_tickcount();
       metric_regime_ticks[ 3+was_busy ] += (ulong)(next - now);
       now = next;
-      if( FD_UNLIKELY( was_busy ) ) idle_iter_cnt = 0;
+      if( FD_UNLIKELY( was_busy ) ) {
+        idle_iter_cnt = 0;
+        fd_scheduler_shm_idle_update(0);
+      }
       continue;
     }
 
@@ -618,6 +623,7 @@ STEM_(run1)( ulong                        in_cnt,
       prefrag_ticks = (ulong)(prefrag_next - now);
       now = prefrag_next;
       idle_iter_cnt = 0;
+      fd_scheduler_shm_idle_update(0);
     }
 #endif
 
@@ -748,7 +754,8 @@ STEM_(run1)( ulong                        in_cnt,
 #endif
 
     /* Windup for the next in poll and accumulate diagnostics */
-    idle_iter_cnt  = 0;
+    idle_iter_cnt = 0;
+    fd_scheduler_shm_idle_update(0);
 
     this_in_seq    = fd_seq_inc( this_in_seq, 1UL );
     this_in->seq   = this_in_seq;
@@ -823,6 +830,8 @@ STEM_(run)( fd_topo_t *      topo,
 #endif
 
   STEM_CALLBACK_CONTEXT_TYPE * ctx = (STEM_CALLBACK_CONTEXT_TYPE*)fd_ulong_align_up( (ulong)fd_topo_obj_laddr( topo, tile->tile_obj_id ), STEM_CALLBACK_CONTEXT_ALIGN );
+
+  fd_scheduler_shm_init( tile->name );
 
   STEM_(run1)( polled_in_cnt,
                in_mcache,
