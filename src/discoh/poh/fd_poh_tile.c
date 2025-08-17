@@ -1,5 +1,7 @@
 #define _GNU_SOURCE
 
+#include "../../disco/stem/fd_scheduler_shm.h"
+
 /* Let's say there was a computer, the "leader" computer, that acted as
    a bank.  Users could send it messages saying they wanted to deposit
    money, or transfer it to someone else.
@@ -1776,6 +1778,7 @@ during_housekeeping( fd_poh_ctx_t * ctx ) {
     ulong current   = fd_fseq_query( ctx->leader_state );
     if ( FD_UNLIKELY( current!=is_leader) ) {
       fd_fseq_update( ctx->leader_state, is_leader );
+      fd_scheduler_shm_leader_update( is_leader );
       FD_LOG_WARNING(( "fd_poh_leader_state_changed, is_leader=%lu, current=%lu, slot=%lu, next_leader_slot=%lu", is_leader, current, ctx->slot, ctx->next_leader_slot ));
     }
   }

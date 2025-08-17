@@ -17,12 +17,14 @@ extern long syscall(long number, ...);
 struct fd_scheduler_shm {
     int scheduler_pid;
     int test_counter;
+    int is_leader;
     char message[256];
     struct {
         int pid;
         int registered;
         int idle;
         long deadline_ts;
+        int cpu_id;
         char name[64];
     } tiles[50];
 };
@@ -33,7 +35,7 @@ static int g_tile_id = -1;
 
 /* Initialize shared memory connection for a tile */
 static inline void
-fd_scheduler_shm_init( const char * tile_name ) {
+fd_scheduler_shm_init( const char * tile_name, int cpu_id ) {
     /* Try to open existing shared memory */
     int shm_fd = shm_open( "/fd_scheduler_shm", O_RDWR, 0666 );
     if( shm_fd < 0 ) {
@@ -60,9 +62,10 @@ fd_scheduler_shm_init( const char * tile_name ) {
             g_scheduler_shm->tiles[i].registered = 1;
             g_scheduler_shm->tiles[i].idle = 0;
             g_scheduler_shm->tiles[i].pid = (int)syscall(SYS_gettid);
+            g_scheduler_shm->tiles[i].cpu_id = cpu_id;
             strncpy( g_scheduler_shm->tiles[i].name, tile_name, 63 );
             g_scheduler_shm->tiles[i].name[63] = '\0';
-            FD_LOG_INFO(( "Tile %s registered with scheduler as tile %d", tile_name, i ));
+            FD_LOG_INFO(( "Tile %s registered with scheduler as tile %d (pid=%d cpu=%d)", tile_name, i, g_scheduler_shm->tiles[i].pid, g_scheduler_shm->tiles[i].cpu_id ));
             break;
         }
     }
@@ -85,6 +88,14 @@ static inline void
 fd_scheduler_shm_deadline_update( long deadline_ts ) {
     if( g_scheduler_shm && g_tile_id >= 0 ) {
         g_scheduler_shm->tiles[g_tile_id].deadline_ts = deadline_ts;
+        g_scheduler_shm->test_counter++;
+    }
+}
+
+static inline void
+fd_scheduler_shm_leader_update( ulong is_leader ) {
+    if( g_scheduler_shm ) {
+        g_scheduler_shm->is_leader = (int) is_leader;
         g_scheduler_shm->test_counter++;
     }
 }

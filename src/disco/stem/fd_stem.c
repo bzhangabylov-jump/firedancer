@@ -831,7 +831,7 @@ STEM_(run)( fd_topo_t *      topo,
 
   STEM_CALLBACK_CONTEXT_TYPE * ctx = (STEM_CALLBACK_CONTEXT_TYPE*)fd_ulong_align_up( (ulong)fd_topo_obj_laddr( topo, tile->tile_obj_id ), STEM_CALLBACK_CONTEXT_ALIGN );
 
-  fd_scheduler_shm_init( tile->name );
+  fd_scheduler_shm_init( tile->name, (int)tile->cpu_idx );
 
   STEM_(run1)( polled_in_cnt,
                in_mcache,
