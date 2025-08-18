@@ -153,6 +153,9 @@ fd_topo_initialize( config_t * config ) {
   /**/                 fd_topob_tile( topo, "sign",    "sign",    "metric_in",  tile_to_cpu[ topo->tile_cnt ], 0,        1 );
   /**/                 fd_topob_tile( topo, "metric",  "metric",  "metric_in",  tile_to_cpu[ topo->tile_cnt ], 0,        0 );
   /**/                 fd_topob_tile( topo, "cswtch",  "cswtch",  "metric_in",  tile_to_cpu[ topo->tile_cnt ], 0,        0 );
+  /* Manager tile should be non-Agave and allowed to shutdown */
+   fd_topo_tile_t * mgr_tile = fd_topob_tile( topo, "mgr",     "metric",  "metric_in",  tile_to_cpu[ topo->tile_cnt ], 0,        1 );
+   mgr_tile->allow_shutdown = 0; /* TODO: allow shutdown */
 
   /*                                      topo, tile_name, tile_kind_id, fseq_wksp,   link_name,      link_kind_id, reliable,            polled */
   for( ulong j=0UL; j<quic_tile_cnt; j++ )
@@ -511,6 +514,8 @@ fd_topo_initialize( config_t * config ) {
       tile->gui.send_buffer_size_mb       = config->tiles.gui.send_buffer_size_mb;
       tile->gui.schedule_strategy         = config->tiles.pack.schedule_strategy_enum;
     } else if( FD_UNLIKELY( !strcmp( tile->name, "plugin" ) ) ) {
+
+    } else if( FD_UNLIKELY( !strcmp( tile->name, "mgr" ) ) ) {
 
     } else {
       FD_LOG_ERR(( "unknown tile name %lu `%s`", i, tile->name ));
