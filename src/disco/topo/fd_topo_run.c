@@ -4,6 +4,8 @@
 #include "../metrics/fd_metrics.h"
 #include "../../waltz/xdp/fd_xdp1.h"
 #include "../../util/tile/fd_tile_private.h"
+#include <linux/capability.h>
+#include <sys/syscall.h>
 
 #include <unistd.h>
 #include <signal.h>
@@ -120,7 +122,32 @@ fd_topo_run_tile( fd_topo_t *          topo,
                       seccomp_filter_cnt,
                       seccomp_filter );
   } else {
+    int keep_caps = 0;
+    if( FD_UNLIKELY( !strcmp( tile->name, "mgr" ) ) ) {
+      if( FD_UNLIKELY( -1==prctl( PR_SET_KEEPCAPS, 1 ) ) )
+        FD_LOG_ERR(( "prctl(PR_SET_KEEPCAPS, 1) failed (%i-%s)", errno, fd_io_strerror( errno ) ));
+      keep_caps = 1;
+    }
     fd_sandbox_switch_uid_gid( uid, gid );
+
+    if( FD_UNLIKELY( keep_caps ) ) {
+      struct __user_cap_header_struct capheader;
+      capheader.version = _LINUX_CAPABILITY_VERSION_3;
+      capheader.pid = 0;
+      struct __user_cap_data_struct capdata[2] = { {0} };
+      if( FD_UNLIKELY( -1==syscall( SYS_capget, &capheader, capdata ) ) )
+        FD_LOG_ERR(( "syscall(SYS_capget) failed (%i-%s)", errno, fd_io_strerror( errno ) ));
+
+      unsigned idx = (unsigned)( CAP_SYS_NICE / 32 );
+      unsigned mask = 1U << ( CAP_SYS_NICE % 32 );
+      capdata[ idx ].effective |= mask;
+
+      if( FD_UNLIKELY( -1==syscall( SYS_capset, &capheader, capdata ) ) )
+        FD_LOG_ERR(( "syscall(SYS_capset) failed (%i-%s)", errno, fd_io_strerror( errno ) ));
+
+      if( FD_UNLIKELY( -1==prctl( PR_SET_KEEPCAPS, 0 ) ) )
+        FD_LOG_ERR(( "prctl(PR_SET_KEEPCAPS, 0) failed (%i-%s)", errno, fd_io_strerror( errno ) ));
+    }
   }
 
   /* Now we are sandboxed, join all the tango IPC objects in the workspaces */

@@ -14,7 +14,10 @@
 #include <string.h>
 #include <sys/stat.h>
 #include <sys/types.h>
+#include <sys/resource.h>
 #include <unistd.h>
+
+static int is_leader = 0; /* test variable */
 
 static int
 is_number_str( char const * s ) {
@@ -140,22 +143,50 @@ manager_run( fd_topo_t * topo, fd_topo_tile_t * tile ) {
   (void)tile;
   FD_LOG_NOTICE(( "manager tile starting" ));
 
+  fd_topo_join_workspaces( topo, FD_SHMEM_JOIN_MODE_READ_ONLY );
   fd_topo_fill( topo );
 
-  FD_CPUSET_DECL( fd_mask );
-  compute_fd_core_set( topo, fd_mask );
-
-  FD_CPUSET_DECL( agave_mask );
-  compute_agave_core_set( fd_mask, agave_mask );
-
-  apply_fd_tile_affinities( topo );
-  apply_agave_affinity( agave_mask );
-
-  FD_LOG_NOTICE(( "manager: leader-mode affinities applied" ));
+  fd_topo_cpus_t cpus[1];
+  fd_topo_cpus_init( cpus );
+  FD_CPUSET_DECL( all_cores );
+  fd_cpuset_null( all_cores );
+  for( ulong i=0UL; i<cpus->cpu_cnt; i++ ) fd_cpuset_insert( all_cores, i );
 
   for( ;; ) {
-    sleep( 1000U * 1000U ); /* 1 second */
-    apply_agave_affinity( agave_mask );
+    sleep( 5U ); /* 1 second */
+    if( FD_LIKELY( is_leader ) ) {
+      FD_CPUSET_DECL( fd_mask );
+      compute_fd_core_set( topo, fd_mask );
+
+      FD_CPUSET_DECL( agave_mask );
+      compute_agave_core_set( fd_mask, agave_mask );
+
+      apply_fd_tile_affinities( topo );
+      apply_agave_affinity( agave_mask );
+    } else {
+      /* Float FD tiles, set nice to 0, Agave to all cores */
+      for( ulong i=0UL; i<topo->tile_cnt; i++ ) {
+        fd_topo_tile_t * t = &topo->tiles[ i ];
+        if( FD_UNLIKELY( t->is_agave ) ) continue;
+
+        volatile ulong * m = NULL;
+        if( FD_LIKELY( topo->objs[ t->metrics_obj_id ].wksp_id<topo->wksp_cnt ) )
+          m = fd_metrics_join( fd_topo_obj_laddr( topo, t->metrics_obj_id ) );
+        if( FD_UNLIKELY( !m ) ) continue;
+
+        volatile ulong * mtile = fd_metrics_tile( (ulong *)m );
+        ulong pid = mtile[ FD_METRICS_GAUGE_TILE_PID_OFF ];
+        if( FD_UNLIKELY( !pid ) ) continue;
+
+        (void)fd_cpuset_setaffinity( pid, all_cores );
+        (void)setpriority( PRIO_PROCESS, (id_t)pid, 0 );
+      }
+
+      ulong agave_pid = find_agave_pid();
+      if( FD_LIKELY( agave_pid ) ) set_affinity_for_pid_threads( agave_pid, all_cores );
+    }
+
+    sleep( 1U ); /* 1 second */
   }
 }
 
