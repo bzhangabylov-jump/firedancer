@@ -57,15 +57,22 @@ fd_scheduler_shm_init( const char * tile_name, int cpu_id ) {
 
     /* Find a free tile slot */
     for( int i = 0; i < 50; i++ ) {
-        if( !g_scheduler_shm->tiles[i].registered ) {
+        int expected = 0; /* 0 = free, 2 = claiming, 1 = registered */
+        if (__atomic_compare_exchange_n(&g_scheduler_shm->tiles[i].registered,
+                                &expected, 2,
+                                0, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) {
             g_tile_id = i;
-            g_scheduler_shm->tiles[i].registered = 1;
+
             g_scheduler_shm->tiles[i].idle = 0;
             g_scheduler_shm->tiles[i].pid = (int)syscall(SYS_gettid);
             g_scheduler_shm->tiles[i].cpu_id = cpu_id;
             strncpy( g_scheduler_shm->tiles[i].name, tile_name, 63 );
             g_scheduler_shm->tiles[i].name[63] = '\0';
-            FD_LOG_INFO(( "Tile %s registered with scheduler as tile %d (pid=%d cpu=%d)", tile_name, i, g_scheduler_shm->tiles[i].pid, g_scheduler_shm->tiles[i].cpu_id ));
+
+            __atomic_store_n(&g_scheduler_shm->tiles[i].registered, 1, __ATOMIC_RELEASE);
+
+            FD_LOG_INFO(( "Tile %s registered as tile %d (pid=%d cpu=%d)",
+                        tile_name, i, g_scheduler_shm->tiles[i].pid, g_scheduler_shm->tiles[i].cpu_id ));
             break;
         }
     }
