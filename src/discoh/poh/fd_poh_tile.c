@@ -2,6 +2,14 @@
 
 #include "../../disco/stem/fd_scheduler_shm.h"
 
+/* DEMO: Manual leader control */
+#include <sys/mman.h>
+#include <fcntl.h>
+#include <unistd.h>
+
+static void fd_manual_leader_init(void);
+static int  fd_manual_leader_read(void);
+
 /* Let's say there was a computer, the "leader" computer, that acted as
    a bank.  Users could send it messages saying they wanted to deposit
    money, or transfer it to someone else.
@@ -1760,6 +1768,7 @@ after_credit( fd_poh_ctx_t *      ctx,
     }
   }
 }
+// static int leader_to_non_leader = 0;
 
 static inline void
 during_housekeeping( fd_poh_ctx_t * ctx ) {
@@ -1772,6 +1781,12 @@ during_housekeeping( fd_poh_ctx_t * ctx ) {
     FD_COMPILER_MFENCE();
     fd_ext_poh_signal_leader_change( ctx->signal_leader_change );
   }
+
+  /* DEMO: Manual override, if present, otherwise assume leader */
+  fd_manual_leader_init();
+  int override = fd_manual_leader_read();
+  ulong effective_leader = (override >= 0) ? (ulong)override : 1;
+  fd_scheduler_shm_leader_update( effective_leader );
 
   if ( FD_UNLIKELY( ctx->leader_state ) ) {
     ulong is_leader = ctx->slot+1UL>=ctx->next_leader_slot;
@@ -2412,3 +2427,32 @@ fd_topo_run_tile_t fd_tile_poh = {
   .unprivileged_init        = unprivileged_init,
   .run                      = stem_run,
 };
+
+
+/* DEMO: Manual leader control */
+/* Another process can write 0/1 to /fd_manual_leader */
+static volatile int * g_manual_leader = NULL;
+
+static void
+fd_manual_leader_init(void) {
+  if (g_manual_leader) return;
+  int fd = shm_open("/fd_manual_leader", O_RDWR, 0666);
+  if (fd<0) return;
+  /* Ensure the object is at least sizeof(int) */
+  int ret = ftruncate(fd, (off_t)sizeof(int));
+  if (ret < 0) {
+    FD_LOG_ERR(( "ftruncate failed: %d", ret ));
+    return;
+  }
+  void *p = mmap(NULL, sizeof(int), PROT_READ|PROT_WRITE, MAP_SHARED, fd, 0);
+  close(fd);
+  if (p==MAP_FAILED) return;
+  g_manual_leader = (volatile int *)p;
+}
+
+static int
+fd_manual_leader_read(void) {
+  if (!g_manual_leader) return -1; /* not available */
+  int v = *g_manual_leader;
+  return v ? 1 : 0;
+}

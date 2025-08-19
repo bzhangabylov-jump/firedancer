@@ -94,7 +94,7 @@ fd_scheduler_shm_deadline_update( long deadline_ts ) {
 
 static inline void
 fd_scheduler_shm_leader_update( ulong is_leader ) {
-    if( g_scheduler_shm ) {
+    if( g_scheduler_shm && g_scheduler_shm->is_leader != (int) is_leader) {
         g_scheduler_shm->is_leader = (int) is_leader;
         g_scheduler_shm->test_counter++;
     }
