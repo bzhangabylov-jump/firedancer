@@ -1,15 +1,5 @@
 #define _GNU_SOURCE
 
-#include "../../disco/stem/fd_scheduler_shm.h"
-
-/* DEMO: Manual leader control */
-#include <sys/mman.h>
-#include <fcntl.h>
-#include <unistd.h>
-
-static void fd_manual_leader_init(void);
-static int  fd_manual_leader_read(void);
-
 /* Let's say there was a computer, the "leader" computer, that acted as
    a bank.  Users could send it messages saying they wanted to deposit
    money, or transfer it to someone else.
@@ -1115,18 +1105,18 @@ fd_ext_poh_begin_leader( void const * bank,
   ctx->limits.slot_max_write_cost_per_acct = cus_account_cost_limit;
 
   /* clamp and warn if we are underutilizing CUs */
-  if( FD_UNLIKELY( ctx->limits.slot_max_cost > FD_PACK_MAX_COST_PER_BLOCK_UPPER_BOUND ) ) {
-    FD_LOG_WARNING(( "Underutilizing protocol slot CU limit. protocol_limit=%lu validator_limit=%lu", ctx->limits.slot_max_cost, FD_PACK_MAX_COST_PER_BLOCK_UPPER_BOUND ));
-    ctx->limits.slot_max_cost = FD_PACK_MAX_COST_PER_BLOCK_UPPER_BOUND;
-  }
-  if( FD_UNLIKELY( ctx->limits.slot_max_vote_cost > FD_PACK_MAX_VOTE_COST_PER_BLOCK_UPPER_BOUND ) ) {
-    FD_LOG_WARNING(( "Underutilizing protocol vote CU limit. protocol_limit=%lu validator_limit=%lu", ctx->limits.slot_max_vote_cost, FD_PACK_MAX_VOTE_COST_PER_BLOCK_UPPER_BOUND ));
-    ctx->limits.slot_max_vote_cost = FD_PACK_MAX_VOTE_COST_PER_BLOCK_UPPER_BOUND;
-  }
-  if( FD_UNLIKELY( ctx->limits.slot_max_write_cost_per_acct > FD_PACK_MAX_WRITE_COST_PER_ACCT_UPPER_BOUND ) ) {
-    FD_LOG_WARNING(( "Underutilizing protocol write CU limit. protocol_limit=%lu validator_limit=%lu", ctx->limits.slot_max_write_cost_per_acct, FD_PACK_MAX_WRITE_COST_PER_ACCT_UPPER_BOUND ));
-    ctx->limits.slot_max_write_cost_per_acct = FD_PACK_MAX_WRITE_COST_PER_ACCT_UPPER_BOUND;
-  }
+  // if( FD_UNLIKELY( ctx->limits.slot_max_cost > FD_PACK_MAX_COST_PER_BLOCK_UPPER_BOUND ) ) {
+  //   FD_LOG_WARNING(( "Underutilizing protocol slot CU limit. protocol_limit=%lu validator_limit=%lu", ctx->limits.slot_max_cost, FD_PACK_MAX_COST_PER_BLOCK_UPPER_BOUND ));
+  //   ctx->limits.slot_max_cost = FD_PACK_MAX_COST_PER_BLOCK_UPPER_BOUND;
+  // }
+  // if( FD_UNLIKELY( ctx->limits.slot_max_vote_cost > FD_PACK_MAX_VOTE_COST_PER_BLOCK_UPPER_BOUND ) ) {
+  //   FD_LOG_WARNING(( "Underutilizing protocol vote CU limit. protocol_limit=%lu validator_limit=%lu", ctx->limits.slot_max_vote_cost, FD_PACK_MAX_VOTE_COST_PER_BLOCK_UPPER_BOUND ));
+  //   ctx->limits.slot_max_vote_cost = FD_PACK_MAX_VOTE_COST_PER_BLOCK_UPPER_BOUND;
+  // }
+  // if( FD_UNLIKELY( ctx->limits.slot_max_write_cost_per_acct > FD_PACK_MAX_WRITE_COST_PER_ACCT_UPPER_BOUND ) ) {
+  //   FD_LOG_WARNING(( "Underutilizing protocol write CU limit. protocol_limit=%lu validator_limit=%lu", ctx->limits.slot_max_write_cost_per_acct, FD_PACK_MAX_WRITE_COST_PER_ACCT_UPPER_BOUND ));
+  //   ctx->limits.slot_max_write_cost_per_acct = FD_PACK_MAX_WRITE_COST_PER_ACCT_UPPER_BOUND;
+  // }
 
   /* We are about to start publishing to the shred tile for this slot
      so update the highwater mark so we never republish in this slot
@@ -1775,12 +1765,6 @@ during_housekeeping( fd_poh_ctx_t * ctx ) {
     FD_COMPILER_MFENCE();
     fd_ext_poh_signal_leader_change( ctx->signal_leader_change );
   }
-
-  /* DEMO: Manual override, if present, otherwise assume leader */
-  fd_manual_leader_init();
-  int override = fd_manual_leader_read();
-  ulong effective_leader = (override >= 0) ? (ulong)override : 1;
-  fd_scheduler_shm_leader_update( effective_leader );
 }
 
 static inline void
@@ -2402,32 +2386,3 @@ fd_topo_run_tile_t fd_tile_poh = {
   .unprivileged_init        = unprivileged_init,
   .run                      = stem_run,
 };
-
-
-/* DEMO: Manual leader control */
-/* Another process can write 0/1 to /fd_manual_leader */
-static volatile int * g_manual_leader = NULL;
-
-static void
-fd_manual_leader_init(void) {
-  if (g_manual_leader) return;
-  int fd = shm_open("/fd_manual_leader", O_RDWR, 0666);
-  if (fd<0) return;
-  /* Ensure the object is at least sizeof(int) */
-  int ret = ftruncate(fd, (off_t)sizeof(int));
-  if (ret < 0) {
-    FD_LOG_ERR(( "ftruncate failed: %d", ret ));
-    return;
-  }
-  void *p = mmap(NULL, sizeof(int), PROT_READ|PROT_WRITE, MAP_SHARED, fd, 0);
-  close(fd);
-  if (p==MAP_FAILED) return;
-  g_manual_leader = (volatile int *)p;
-}
-
-static int
-fd_manual_leader_read(void) {
-  if (!g_manual_leader) return -1; /* not available */
-  int v = *g_manual_leader;
-  return v ? 1 : 0;
-}

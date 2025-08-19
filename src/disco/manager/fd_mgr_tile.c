@@ -16,8 +16,31 @@
 #include <sys/types.h>
 #include <sys/resource.h>
 #include <unistd.h>
+#include <sys/mman.h>
+#include "fd_mgr_tile.h"
 
-static int is_leader = 0; /* test variable */
+/* Demo manual override: read from /dev/shm/fd_manual_leader */
+static volatile int * g_manual_leader_mgr = NULL;
+static void fd_manual_leader_mgr_init( void ) {
+  if( g_manual_leader_mgr ) return;
+  int fd = shm_open( "/fd_manual_leader", O_RDWR|O_CREAT, 0666 );
+  FD_LOG_WARNING(( "fd_manual_leader_mgr_init: %d", fd ));
+  if( fd<0 ) return;
+  if( FD_UNLIKELY( ftruncate( fd, (off_t)sizeof(int) )<0 ) ) { close( fd ); return; }
+  void * p = mmap( NULL, sizeof(int), PROT_READ|PROT_WRITE, MAP_SHARED, fd, 0 );
+  close( fd );
+  if( p==MAP_FAILED ) return;
+  g_manual_leader_mgr = (volatile int *)p;
+}
+static int fd_manual_leader_mgr_read( void ) {
+  if( FD_UNLIKELY( !g_manual_leader_mgr ) ) return -1;
+  int v = *g_manual_leader_mgr;
+  return v ? 1 : 0;
+}
+
+void update_is_leader( ulong new_is_leader ) {
+  (void)new_is_leader;
+}
 
 static int
 is_number_str( char const * s ) {
@@ -78,53 +101,44 @@ set_affinity_for_pid_threads( ulong pid, fd_cpuset_t const * mask ) {
 }
 
 static void
-compute_fd_core_set( fd_topo_t const * topo, fd_cpuset_t * out_mask ) {
-  FD_CPUSET_DECL( mask );
-  fd_cpuset_null( mask );
-  for( ulong i=0UL; i<topo->tile_cnt; i++ ) {
-    fd_topo_tile_t const * t = &topo->tiles[ i ];
-    if( FD_UNLIKELY( t->is_agave ) ) continue;
-    if( FD_UNLIKELY( !strcmp( t->name, "mgr" ) ) ) continue;
-    if( t->cpu_idx!=ULONG_MAX && t->cpu_idx<65535UL ) fd_cpuset_insert( mask, t->cpu_idx );
+set_tile_affinity( fd_topo_t * topo, fd_topo_tile_t * t, fd_cpuset_t const * mask, int desired_nice ) {
+  volatile ulong * m = NULL;
+  if( FD_LIKELY( topo->objs[ t->metrics_obj_id ].wksp_id<topo->wksp_cnt ) )
+    m = fd_metrics_join( fd_topo_obj_laddr( topo, t->metrics_obj_id ) );
+  if( FD_UNLIKELY( !m ) ) return;
+
+  volatile ulong * mtile = fd_metrics_tile( (ulong *)m );
+  ulong tid = mtile[ FD_METRICS_GAUGE_TILE_TID_OFF ];
+  ulong pid = mtile[ FD_METRICS_GAUGE_TILE_PID_OFF ];
+  if( FD_UNLIKELY( !tid && !pid ) ) return;
+
+  if( FD_LIKELY( tid ) ) {
+    if( FD_UNLIKELY( fd_cpuset_setaffinity( tid, mask ) ) ) {
+      FD_LOG_WARNING(( "sched_setaffinity failed for tile %s:%lu tid %lu (%i-%s)", t->name, t->kind_id, tid, errno, fd_io_strerror( errno ) ));
+    }
+  } else {
+    set_affinity_for_pid_threads( pid, mask );
   }
-  fd_memcpy( out_mask, mask, fd_cpuset_footprint() );
+
+  if( desired_nice!=INT_MIN ) {
+    if( FD_LIKELY( tid ) ) (void)setpriority( PRIO_PROCESS, (id_t)tid, desired_nice );
+    else if( pid )         (void)setpriority( PRIO_PROCESS, (id_t)pid, desired_nice );
+  }
 }
 
 static void
-compute_agave_core_set( fd_cpuset_t const * fd_mask, fd_cpuset_t * out_mask ) {
-  fd_topo_cpus_t cpus[1];
-  fd_topo_cpus_init( cpus );
-  FD_CPUSET_DECL( mask );
-  fd_cpuset_null( mask );
-  for( ulong i=0UL; i<cpus->cpu_cnt; i++ ) {
-    if( !fd_cpuset_test( fd_mask, i ) ) fd_cpuset_insert( mask, i );
-  }
-  fd_memcpy( out_mask, mask, fd_cpuset_footprint() );
-}
-
-static void
-apply_fd_tile_affinities( fd_topo_t * topo ) {
+apply_fd_tile_affinities( fd_topo_t * topo, int desired_nice ) {
   for( ulong i=0UL; i<topo->tile_cnt; i++ ) {
     fd_topo_tile_t * t = &topo->tiles[ i ];
     if( FD_UNLIKELY( t->is_agave ) ) continue;
     if( FD_UNLIKELY( !strcmp( t->name, "mgr" ) ) ) continue;
     if( t->cpu_idx==ULONG_MAX || t->cpu_idx>=65535UL ) continue;
 
-    volatile ulong * m = NULL;
-    if( FD_LIKELY( topo->objs[ t->metrics_obj_id ].wksp_id<topo->wksp_cnt ) )
-      m = fd_metrics_join( fd_topo_obj_laddr( topo, t->metrics_obj_id ) );
-    if( FD_UNLIKELY( !m ) ) continue;
-
-    volatile ulong * mtile = fd_metrics_tile( (ulong *)m );
-    ulong pid = mtile[ FD_METRICS_GAUGE_TILE_PID_OFF ];
-    if( FD_UNLIKELY( !pid ) ) continue;
-
     FD_CPUSET_DECL( one );
     fd_cpuset_null( one );
     fd_cpuset_insert( one, t->cpu_idx );
-    if( FD_UNLIKELY( fd_cpuset_setaffinity( pid, one ) ) ) {
-      FD_LOG_WARNING(( "sched_setaffinity failed for tile %s:%lu pid %lu (%i-%s)", t->name, t->kind_id, pid, errno, fd_io_strerror( errno ) ));
-    }
+
+    set_tile_affinity( topo, t, one, desired_nice );
   }
 }
 
@@ -139,54 +153,73 @@ apply_agave_affinity( fd_cpuset_t const * agave_mask ) {
 }
 
 static void
+float_fd_tiles( fd_topo_t * topo, fd_cpuset_t const * all_cores, int nice_value ) {
+  for( ulong i=0UL; i<topo->tile_cnt; i++ ) {
+    fd_topo_tile_t * t = &topo->tiles[ i ];
+    if( FD_UNLIKELY( t->is_agave ) ) continue;
+    set_tile_affinity( topo, t, all_cores, nice_value );
+  }
+}
+
+static void
 manager_run( fd_topo_t * topo, fd_topo_tile_t * tile ) {
   (void)tile;
   FD_LOG_NOTICE(( "manager tile starting" ));
 
+  /* Optional runtime toggle: set FD_MANAGER_ENABLED=0 to disable manager logic */
+  int manager_enabled = 1;
+  if( FD_UNLIKELY( !manager_enabled ) ) {
+    FD_LOG_WARNING(( "manager: disabled via FD_MANAGER_ENABLED=0 (idling)" ));
+    for( ;; ) sleep( 1000U * 1000U ); /* 1 second */
+  }
+
   fd_topo_join_workspaces( topo, FD_SHMEM_JOIN_MODE_READ_ONLY );
   fd_topo_fill( topo );
 
+  /* Demo: map manual override */
+  fd_manual_leader_mgr_init();
+
   fd_topo_cpus_t cpus[1];
   fd_topo_cpus_init( cpus );
+
+  /* Precompute masks once */
   FD_CPUSET_DECL( all_cores );
   fd_cpuset_null( all_cores );
   for( ulong i=0UL; i<cpus->cpu_cnt; i++ ) fd_cpuset_insert( all_cores, i );
 
+  FD_CPUSET_DECL( fd_mask );
+  fd_cpuset_null( fd_mask );
+  for( ulong i=0UL; i<topo->tile_cnt; i++ ) {
+    fd_topo_tile_t const * t = &topo->tiles[ i ];
+    if( FD_UNLIKELY( t->is_agave ) ) continue;
+    if( FD_UNLIKELY( !strcmp( t->name, "mgr" ) ) ) continue;
+    if( t->cpu_idx!=ULONG_MAX && t->cpu_idx<65535UL ) fd_cpuset_insert( fd_mask, t->cpu_idx );
+  }
+
+  FD_CPUSET_DECL( agave_mask );
+  fd_cpuset_null( agave_mask );
+  for( ulong i=0UL; i<cpus->cpu_cnt; i++ ) {
+    if( !fd_cpuset_test( fd_mask, i ) ) fd_cpuset_insert( agave_mask, i );
+  }
+
+  ulong last_leader_value = ULONG_MAX;
   for( ;; ) {
-    sleep( 5U ); /* 1 second */
-    if( FD_LIKELY( is_leader ) ) {
-      FD_CPUSET_DECL( fd_mask );
-      compute_fd_core_set( topo, fd_mask );
+    /* Demo manual override (comment out to rely on PoH logic) */
+    int manual = fd_manual_leader_mgr_read();
+    FD_LOG_WARNING(( "manual =================: %d", manual ));
+    ulong cur_is_leader = (ulong)((manual>=0) ? manual : 1);
 
-      FD_CPUSET_DECL( agave_mask );
-      compute_agave_core_set( fd_mask, agave_mask );
-
-      apply_fd_tile_affinities( topo );
-      apply_agave_affinity( agave_mask );
-    } else {
-      /* Float FD tiles, set nice to 0, Agave to all cores */
-      for( ulong i=0UL; i<topo->tile_cnt; i++ ) {
-        fd_topo_tile_t * t = &topo->tiles[ i ];
-        if( FD_UNLIKELY( t->is_agave ) ) continue;
-
-        volatile ulong * m = NULL;
-        if( FD_LIKELY( topo->objs[ t->metrics_obj_id ].wksp_id<topo->wksp_cnt ) )
-          m = fd_metrics_join( fd_topo_obj_laddr( topo, t->metrics_obj_id ) );
-        if( FD_UNLIKELY( !m ) ) continue;
-
-        volatile ulong * mtile = fd_metrics_tile( (ulong *)m );
-        ulong pid = mtile[ FD_METRICS_GAUGE_TILE_PID_OFF ];
-        if( FD_UNLIKELY( !pid ) ) continue;
-
-        (void)fd_cpuset_setaffinity( pid, all_cores );
-        (void)setpriority( PRIO_PROCESS, (id_t)pid, 0 );
+    if( cur_is_leader != last_leader_value ) {
+      FD_LOG_WARNING(( "REGIME SWITCH: is_leader = %lu", cur_is_leader ));
+      last_leader_value = cur_is_leader;
+      if( FD_LIKELY( cur_is_leader ) ) {
+        apply_fd_tile_affinities( topo, -19 );
+        apply_agave_affinity( agave_mask );
+      } else {
+        float_fd_tiles( topo, all_cores, 0 );
+        apply_agave_affinity( all_cores );
       }
-
-      ulong agave_pid = find_agave_pid();
-      if( FD_LIKELY( agave_pid ) ) set_affinity_for_pid_threads( agave_pid, all_cores );
     }
-
-    sleep( 1U ); /* 1 second */
   }
 }
 
